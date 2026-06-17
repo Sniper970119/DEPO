@@ -1,0 +1,112 @@
+# DEPO Trainer Configuration
+# Difficulty-Estimated Policy Optimization
+#
+# Inherits all defaults from ppo_trainer, then applies DEPO-specific overrides.
+# Key toggle:
+#   depo.use_dapo: true   → DAPO clip + overlong_buffer (recommended for math tasks)
+#   depo.use_dapo: false  → standard GRPO clip (pure DEPO, no asymmetric clip)
+
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+# -------------------------------------------------------------------------
+# DEPO-specific configuration block
+# -------------------------------------------------------------------------
+depo:
+
+  # Whether to enable DAPO-style features on top of DEPO:
+  #   True  → asymmetric clip ratios (clip_ratio_low / clip_ratio_high),
+  #            overlong_buffer penalty, and DAPO reward_manager
+  #   False → standard GRPO symmetric clip, no overlong_buffer
+  use_dapo: true
+
+# -------------------------------------------------------------------------
+# Data
+# -------------------------------------------------------------------------
+data:
+  gen_batch_size: ${data.train_batch_size}
+
+  # Online RL / difficulty filtering settings
+  online_rl:
+
+    # Enable DEPO difficulty filtering
+    enabled: true
+
+    # Number of training steps during which all prompts are accepted
+    # (scorer not yet calibrated — warm-up phase)
+    warmup_steps: 100
+
+    # Keep prompts whose predicted difficulty falls within [min, max].
+    # 0.15 ≈ too easy (model nearly always correct), 0.85 ≈ too hard.
+    filter_thresholds: [0.15, 0.85]
+
+# -------------------------------------------------------------------------
+# Reward model (Online Scorer — DualHeadScoringModel)
+# -------------------------------------------------------------------------
+reward_model:
+
+  # Built-in VERL reward manager tag; "dapo" applies overlong penalty + rule-based scoring
+  reward_manager: dapo
+
+  # Backbone for the online scorer (a small BERT-family encoder)
+  # Replace with the actual path on your system.
+  model_name_or_path: /path/to/distilbert-base-uncased
+
+  # Scorer optimizer learning rate
+  learning_rate: 2e-4
+
+  # Mini-batch size for scorer training (tune to avoid OOM)
+  micro_batch_size_per_gpu: 8
+
+  # Batch size for scorer inference (predict)
+  predict_batch_size: 16
+
+  # Weight for knowledge-distillation loss (policy log-prob → scorer distill head)
+  w_distill: 0.5
+
+  # Weight for pairwise ranking loss
+  w_ranking: 3.0
+
+  # Minimum difficulty gap to trigger a ranking constraint between two prompts
+  ranking_threshold: 0.05
+
+  # Ranking loss margin
+  ranking_margin: 0.5
+
+  # Overlong response penalty (active when depo.use_dapo = true)
+  overlong_buffer:
+    enable: false   # Set to true when depo.use_dapo is true
+    len: 4096       # Buffer length before penalty kicks in
+    penalty_factor: 1.0
+    log: false
+
+# -------------------------------------------------------------------------
+# Algorithm
+# -------------------------------------------------------------------------
+algorithm:
+
+  # GRPO advantage estimator (works for both DAPO and pure DEPO)
+  adv_estimator: grpo
+
+  # KL settings — typically disabled for GRPO/DAPO-style training
+  use_kl_in_reward: false
+  kl_ctrl:
+    kl_coef: 0.0
+
+  # DAPO-style group filtering (disabled when use_dapo=false)
+  filter_groups:
+    _target_: verl.trainer.config.FilterGroupsConfig
+    enable: false
+    metric: null
+    max_num_gen_batches: 0
+
+# -------------------------------------------------------------------------
+# Trainer
+# -------------------------------------------------------------------------
+trainer:
+  project_name: verl-depo
